@@ -1,0 +1,84 @@
+name: Build
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+  workflow_dispatch:
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    name: Preparing release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Get tag
+        id: gtag
+        run: echo ::set-output name=tag::$(git describe --tags)
+
+      - name: Create release
+        env:
+          GH_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.gtag.outputs.tag }}
+        run: |
+          gh release create ${RELEASE_TAG} -t ${RELEASE_TAG} --generate-notes
+
+  build:
+    needs: create-release
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        build-name:
+          - i386
+          - i686
+          - x86_64
+        include:
+          - build-name: i386
+            c-flags: "-m32"
+          - build-name: i686
+            c-flags: "-m32"
+          - build-name: x86_64
+            c-flags: "-m64"
+
+    runs-on: ubuntu-latest
+    name: Building ${{ matrix.build_name }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install gcc gcc-multilib build-essential zip
+
+      - name: Get tag
+        id: gtag
+        run: echo ::set-output name=tag::$(git describe --tags)
+
+      - name: Build release
+        env:
+          OUTDIR: linux-${{ matrix.build-name }}
+        run: |
+          gcc subuid_shell.c ${{ matrix.c-flags }} -o subuid_shell
+          gcc subshell.c     ${{ matrix.c-flags }} -o subshell
+          gcc rootshell.c    ${{ matrix.c-flags }} -o rootshell
+          gcc libsubuid.c    ${{ matrix.c-flags }} -o libsubuid.so -fPIC -shared
+          mkdir -p ${OUTDIR}/bin
+          mv subuid_shell subshell rootshell libsubuid.so ${OUTDIR}/bin
+          cp *.c *.sh ${OUTDIR}
+          tar czf ${OUTDIR}.tar.gz ${OUTDIR}
+          zip ${OUTDIR}.zip ${OUTDIR} -r
+
+      - name: Publish release
+        env:
+          GH_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.gtag.outputs.tag }}
+          OUTDIR:      linux-${{ matrix.build-name }}
+        run: |
+          gh release upload ${RELEASE_TAG} ${OUTDIR}.*
